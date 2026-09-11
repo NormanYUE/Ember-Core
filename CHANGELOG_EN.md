@@ -2,6 +2,47 @@
 
 All notable changes to Ember Core Components.
 
+## [2.0.0] — Spatial Tree Storage Migrated to World-Managed Buffers (Dispose-free)
+
+### Breaking
+- **`SpatialTree` no longer owns native containers and no longer exposes `Dispose()` / `Initialize(Allocator)`.**
+  Tree data now lives in World-managed buffers (auto-freed on `World.Dispose()`); the component itself keeps
+  only scalar state and buffer handles.
+  - Old: `ref var tree = ref world.GetComponent<SpatialTree>(owner); ... tree.Dispose();`
+  - New: `if (world.TryGetSpatialTree(out var tree)) { tree.QuerySphere(center, r, ref buffer); }`
+    Nothing to release; reclaimed with `ECSManager.Dispose()`.
+- All tree operations now go through `SpatialTreeView` (`world.GetSpatialTree()` / `world.TryGetSpatialTree`):
+  `Insert` / `Remove` / `Update` / `QueryAABB` / `QuerySphere` / `BeginTick` / `EndTick` / `Clear`.
+- The entity map switched from `NativeParallelHashMap` to a direct-index sparse map (addressed by `Entity.Index`
+  with in-element version validation for slot reuse) — O(1) lookup at a lower constant.
+
+### Added
+- `SpatialTreeView` (operation view) and `SpatialTreeExtensions` (`GetSpatialTree` / `TryGetSpatialTree` / `EnsureSpatialTree`).
+- New entity-slot-reuse guard test (stale index + new version must not hit an old mapping).
+
+### Fixed
+- Fixed a double decrement of element counts in `Subdivide` (decremented once by `Unlink` and again manually),
+  which skewed leaf-capacity checks and empty-block collapse.
+
+### Changed
+- `SpatialIndexSystem` no longer needs `Allocator.Persistent` initialization; the tree is created on first tick.
+- Test suite grew to 52 tests: 25 pass on CLI; 27 native-container tests run in the Unity Test Runner.
+
+## [1.0.0] — Spatial Index, Frustum Culling & GameObject Presentation
+
+### Breaking
+- Removed static helpers `LocalTransform.Identity` / `LocalTransform.FromPosition` / `LocalToWorld.Identity` / `LocalToWorld.Compose` (no-statics rule). Migration: construct directly via `new LocalTransform(position, quaternion.identity, 1f)`; combine hierarchies with `math.mul(parent.Value, local.ToMatrix())`.
+
+### Added
+- **Spatial index**: `BoundingVolume` / `WorldBounds` components; `SpatialTree` as a fully unmanaged singleton component (unified quadtree/octree, backed by `NativeList`/`NativeParallelHashMap`, zero steady-state GC); `QueryAABB`/`QuerySphere` fill a caller-provided `NativeList<Entity>`; vanished entities are removed by mark-and-sweep (one frame latency); `SpatialIndexConfig` singleton configures dimension/root extent/depth/capacity.
+- **Frustum culling**: `CameraFrustum` singleton (written per frame by bridge code), `VisibilityState` (bit0 = current frame, bit1 = previous frame, with `EnteredView`/`ExitedView` edge properties), `InView` tag (added/removed on edges only); `FrustumMath` pure math (Gribb-Hartmann plane extraction, sphere/AABB tests, world-bounds transform); `WorldBoundsSystem` and `FrustumCullingSystem` run as Burst jobs.
+- **System groups**: `SpatialSystemGroup` wires the entire spatial/culling pipeline in one registration (setup → world bounds → culling → tag apply → spatial index).
+- **GameObject presentation**: `PresentationPrefab` (prefab id) / `PresentationLink` / `PresentationCommands` singleton command channel; viewport edges drive Spawn/Despawn, destroyed entities are reclaimed via mark-and-sweep (one frame latency); `PresentationSyncSystem` (Burst job) writes TRS sync slots in parallel; the managed `GameObjectPresentation` bridge drains commands and applies transforms in batch via `TransformAccessArray` + `IJobParallelForTransform` (Burst); `IGameObjectPool` allows injecting a business-side pool, with `GameObjectPool` as the default implementation (bucketed stacks + Prewarm).
+- **Explicit Burst policy**: assembly-level `EmberJobCompilationMode.Burst`; added `com.unity.burst` 1.8.13 package dependency.
+
+### Changed
+- Test suite grew to 51 tests: 25 pass on CLI; 26 tests requiring Unity native containers/engine APIs run in the Unity Test Runner.
+
 ## [0.1.0] — Initial Release
 
 ### Added
