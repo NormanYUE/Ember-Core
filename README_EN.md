@@ -40,8 +40,8 @@ duplicated here.
 
 | Component | Kind | Description |
 |---|---|---|
-| `LocalTransform` | Data | Local transform: `Position` (float3) / `Rotation` (quaternion) / `Scale` (uniform float). Acts as world transform when the entity has no parent. Helpers: `Identity`, `FromPosition`, `ToMatrix()`, `TransformPoint`, `InverseTransformPoint`, `TransformDirection` |
-| `LocalToWorld` | Data | Local-to-world `float4x4` matrix. Helpers: `Identity`, `Position` / `Right` / `Up` / `Forward`, `TransformPoint`, `Compose(local, parent)` |
+| `LocalTransform` | Data | Local transform: `Position` (float3) / `Rotation` (quaternion) / `Scale` (uniform float). Acts as world transform when the entity has no parent. Helpers: `ToMatrix()`, `TransformPoint`, `InverseTransformPoint`, `TransformDirection` |
+| `LocalToWorld` | Data | Local-to-world `float4x4` matrix. Helpers: `Position` / `Right` / `Up` / `Forward`, `TransformPoint` |
 
 ### Motion
 
@@ -72,6 +72,41 @@ duplicated here.
 |---|---|---|
 | `GlobalRandom` | Singleton | Global deterministic random source (`Unity.Mathematics.Random`). It is a value type whose state advances per draw — access it by `ref`. For parallel random streams, give each entity its own random component instead of sharing this singleton |
 
+### Spatial Index
+
+| Type | Description |
+|---|---|
+| `BoundingVolume` | Local-space AABB (`Center`/`Extents`); input for indexing and culling |
+| `WorldBounds` | World-space AABB, recomputed every frame by `WorldBoundsSystem` (Burst job) |
+| `SpatialIndexConfig` | Singleton: dimension (QuadXY/QuadXZ/Octree), root extent, max depth, node capacity; built-in defaults apply when absent |
+| `SpatialTree` | Singleton: fully unmanaged spatial tree (unified quadtree/octree, zero steady-state GC). Use by `ref`: `QueryAABB`/`QuerySphere` fill a caller-provided `NativeList<Entity>`; call `Dispose()` before teardown to release native containers |
+
+### Frustum Culling
+
+| Type | Description |
+|---|---|
+| `CameraFrustum` | Singleton: six normalized frustum planes, written per frame by camera bridge code |
+| `VisibilityState` | Visibility byte (bit0 = in view this frame, bit1 = last frame; `EnteredView`/`ExitedView` edge properties) |
+| `InView` | Tag for filtering visible entities; added/removed on edges only |
+| `FrustumMath` | Pure math utilities: `FromViewProjection` plane extraction, sphere/AABB frustum tests (Burst-compatible) |
+
+### GameObject Presentation
+
+| Type | Description |
+|---|---|
+| `PresentationPrefab` | Prefab id (int); managed references cannot live in components, so ids map to prefabs in the pool registry |
+| `PresentationLink` | Entity ↔ sync slot (managed by the bridge — do not add/remove manually) |
+| `PresentationCommands` | Singleton: Spawn/Despawn command queue + TRS sync arrays (native container channel) |
+| `IGameObjectPool` / `GameObjectPool` | Pool interface (inject your own implementation) / default Core pool (bucketed stacks + `Prewarm`) |
+| `GameObjectPresentation` | Managed bridge: call `Sync()` after every tick to spawn/recycle/batch-write transforms; call `Dispose()` before teardown |
+
+The pipelines ship as two system groups:
+
+```csharp
+manager.GetTicker(updateIdx).Register<SpatialSystemGroup>();       // setup → bounds → culling → tags → spatial index
+manager.GetTicker(updateIdx).Register<PresentationSystemGroup>();  // presentation (Burst sync) — register after culling
+```
+
 ## Usage Example
 
 ```csharp
@@ -90,7 +125,7 @@ public sealed class SpawnSystem : SystemBase
     protected override void OnTick(SystemContext ctx)
     {
         var entity = ctx.ECB.CreateEntity(new ComponentMask());
-        ctx.ECB.AddComponent(entity, LocalTransform.FromPosition(new float3(0f, 1f, 0f)));
+        ctx.ECB.AddComponent(entity, new LocalTransform(new float3(0f, 1f, 0f), quaternion.identity, 1f));
         ctx.ECB.AddComponent(entity, new LinearVelocity(new float3(0f, 0f, 5f)));
         ctx.ECB.AddComponent(entity, new Lifetime(3f));
     }
@@ -110,6 +145,29 @@ Movement query convention that skips disabled and static entities:
 ```csharp
 var query = EntityQuery.With<LocalTransform, LinearVelocity>().None<Disabled, Static>();
 ```
+
+GameObject presentation wiring (spawn/recycle/sync are viewport-driven):
+
+```csharp
+// Startup
+var pool = new GameObjectPool();
+pool.RegisterPrefab(1, enemyPrefabGo);
+pool.Prewarm(1, 64);                       // optional: pre-warm to remove instantiation spikes
+var presentation = new GameObjectPresentation(world, pool);
+
+// Entity side: attach a prefab id to join the presentation layer
+world.AddComponent(entity, new PresentationPrefab(1));
+
+// Every frame, after manager.Tick(...)
+presentation.Sync();                       // drain commands + batch transform write (Burst)
+
+// Before disposing the manager
+presentation.Dispose();
+```
+
+Custom pools: implement `IGameObjectPool` and inject it into the `GameObjectPresentation`
+constructor, or write your own consumer that drains the `PresentationCommands` singleton
+command queue directly.
 
 ## Component Design Conventions
 

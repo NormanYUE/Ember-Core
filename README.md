@@ -36,8 +36,8 @@ Ember ECS 框架的基础组件库。提供空间变换、运动、时间、状�
 
 | 组件 | 类型 | 说明 |
 |---|---|---|
-| `LocalTransform` | Data | 本地变换：`Position` (float3) / `Rotation` (quaternion) / `Scale` (float 等比)。无父实体时即世界变换。辅助：`Identity`、`FromPosition`、`ToMatrix()`、`TransformPoint`、`InverseTransformPoint`、`TransformDirection` |
-| `LocalToWorld` | Data | 本地到世界的 `float4x4` 矩阵。辅助：`Identity`、`Position` / `Right` / `Up` / `Forward`、`TransformPoint`、`Compose(local, parent)` |
+| `LocalTransform` | Data | 本地变换：`Position` (float3) / `Rotation` (quaternion) / `Scale` (float 等比)。无父实体时即世界变换。辅助：`ToMatrix()`、`TransformPoint`、`InverseTransformPoint`、`TransformDirection` |
+| `LocalToWorld` | Data | 本地到世界的 `float4x4` 矩阵。辅助：`Position` / `Right` / `Up` / `Forward`、`TransformPoint` |
 
 ### Motion（运动）
 
@@ -68,6 +68,41 @@ Ember ECS 框架的基础组件库。提供空间变换、运动、时间、状�
 |---|---|---|
 | `GlobalRandom` | Singleton | 全局确定性随机源（`Unity.Mathematics.Random`）。值类型，每次取数推进状态，须以 `ref` 读写。并行随机流应按实体拆分独立随机组件，不要共用本单例 |
 
+### Spatial Index（空间索引）
+
+| 类型 | 说明 |
+|---|---|
+| `BoundingVolume` | 本地 AABB（`Center`/`Extents`），空间索引与剔除的输入 |
+| `WorldBounds` | 世界 AABB，由 `WorldBoundsSystem`（Job·Burst）每帧换算 |
+| `SpatialIndexConfig` | Singleton：维度（QuadXY/QuadXZ/Octree）、根范围、最大深度、节点容量；不配置时用内置默认值 |
+| `SpatialTree` | Singleton：纯非托管空间树（四叉/八叉统一，0GC 稳态）。经 `ref` 使用：`QueryAABB`/`QuerySphere` 填充调用方 `NativeList<Entity>`；退出前 `Dispose()` 释放原生容器 |
+
+### Culling（视锥剔除）
+
+| 类型 | 说明 |
+|---|---|
+| `CameraFrustum` | Singleton：6 个归一化视锥平面，桥接代码每帧从相机 VP 矩阵写入 |
+| `VisibilityState` | 可见性字节（bit0=当前帧在内，bit1=上一帧在内；`EnteredView`/`ExitedView` 边沿属性） |
+| `InView` | Tag：视口内过滤标记，仅边沿增删 |
+| `FrustumMath` | 纯数学工具：`FromViewProjection` 平面提取、球/AABB 视锥测试（Burst 兼容） |
+
+### Presentation（GameObject 表现层）
+
+| 类型 | 说明 |
+|---|---|
+| `PresentationPrefab` | 预制体 Id（int）；托管引用进不了组件，Id 在池中注册映射 |
+| `PresentationLink` | 实体↔同步槽位（桥自动增删，业务勿动） |
+| `PresentationCommands` | Singleton：Spawn/Despawn 命令队列 + TRS 同步数组（原生容器通道） |
+| `IGameObjectPool` / `GameObjectPool` | 池接口（业务可注入自实现）/ Core 默认池（分桶失活栈 + `Prewarm` 预热） |
+| `GameObjectPresentation` | 托管桥：每帧 Tick 后 `Sync()` 生成/回收/批量回写 Transform；退出前 `Dispose()` |
+
+系统管线已封装为两个组（业务侧各行接入）：
+
+```csharp
+manager.GetTicker(updateIdx).Register<SpatialSystemGroup>();       // 补齐→包围盒→剔除→标签→空间索引
+manager.GetTicker(updateIdx).Register<PresentationSystemGroup>();  // 表现层命令(Job·Burst 同步)——须在剔除之后
+```
+
 ## 使用示例
 
 ```csharp
@@ -86,7 +121,7 @@ public sealed class SpawnSystem : SystemBase
     protected override void OnTick(SystemContext ctx)
     {
         var entity = ctx.ECB.CreateEntity(new ComponentMask());
-        ctx.ECB.AddComponent(entity, LocalTransform.FromPosition(new float3(0f, 1f, 0f)));
+        ctx.ECB.AddComponent(entity, new LocalTransform(new float3(0f, 1f, 0f), quaternion.identity, 1f));
         ctx.ECB.AddComponent(entity, new LinearVelocity(new float3(0f, 0f, 5f)));
         ctx.ECB.AddComponent(entity, new Lifetime(3f));
     }
@@ -106,6 +141,28 @@ time.ElapsedTime += time.DeltaTime;
 ```csharp
 var query = EntityQuery.With<LocalTransform, LinearVelocity>().None<Disabled, Static>();
 ```
+
+GameObject 表现层接入（生成/回收/同步由视口驱动）：
+
+```csharp
+// 启动
+var pool = new GameObjectPool();
+pool.RegisterPrefab(1, enemyPrefabGo);
+pool.Prewarm(1, 64);                       // 可选：预热消除实例化尖峰
+var presentation = new GameObjectPresentation(world, pool);
+
+// 实体侧：挂上预制体 Id 即纳入表现层
+world.AddComponent(entity, new PresentationPrefab(1));
+
+// 每帧：manager.Tick(...) 之后
+presentation.Sync();                       // drain 命令 + Burst 批量回写 Transform
+
+// 退出前（销毁 manager 之前）
+presentation.Dispose();
+```
+
+业务侧自定义池：实现 `IGameObjectPool` 并注入 `GameObjectPresentation` 构造；
+或完全自写消费者直接 drain `PresentationCommands` 单例命令队列。
 
 ## 组件设计约定
 

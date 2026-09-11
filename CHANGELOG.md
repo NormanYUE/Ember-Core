@@ -2,6 +2,21 @@
 
 All notable changes to Ember Core Components.
 
+## [1.0.0] — 空间索引、视锥剔除与 GameObject 表现层
+
+### Breaking
+- 移除静态辅助 `LocalTransform.Identity` / `LocalTransform.FromPosition` / `LocalToWorld.Identity` / `LocalToWorld.Compose`（静态禁令）。迁移：直接构造 `new LocalTransform(position, quaternion.identity, 1f)`；层级组合用 `math.mul(parent.Value, local.ToMatrix())`。
+
+### Added
+- **空间索引**：`BoundingVolume` / `WorldBounds` 组件；`SpatialTree` 纯非托管单例组件（四叉/八叉统一，`NativeList`/`NativeParallelHashMap` 存储，稳态 0GC），`QueryAABB`/`QuerySphere` 填充调用方 `NativeList<Entity>`；消失实体经标记清扫剔除（延迟一帧）；`SpatialIndexConfig` 单例配置维度/根范围/深度/容量。
+- **视锥剔除**：`CameraFrustum` 单例（桥接代码每帧写入）、`VisibilityState`（bit0=当前帧、bit1=上一帧，`EnteredView`/`ExitedView` 边沿属性）、`InView` 标签（仅边沿增删）；`FrustumMath` 纯数学（Gribb-Hartmann 平面提取、球/AABB 测试、世界盒换算）；`WorldBoundsSystem` 与 `FrustumCullingSystem` 为 Burst Job。
+- **系统组**：`SpatialSystemGroup` 一行接入整条空间/剔除管线（补齐→世界包围盒→剔除→标签应用→空间索引）。
+- **GameObject 表现层**：`PresentationPrefab`（预制体 Id）/ `PresentationLink` / `PresentationCommands` 单例命令通道；视口边沿驱动 Spawn/Despawn，销毁实体盖戳清扫（回收延迟一帧）；`PresentationSyncSystem`（Job·Burst）并行写 TRS 同步槽位；托管桥 `GameObjectPresentation` drain 命令并经 `TransformAccessArray` + `IJobParallelForTransform`（Burst）批量回写 GameObject Transform；`IGameObjectPool` 支持业务侧池注入，`GameObjectPool` 为默认池实现（分桶栈 + Prewarm 预热）。
+- **显式 Burst 策略**：程序集级 `EmberJobCompilationMode.Burst`，作业 Burst 编译显式可见；新增 `com.unity.burst` 1.8.13 包依赖。
+
+### Changed
+- 测试扩充至 51 项：CLI 25 项通过；26 项依赖 Unity 原生容器/引擎 API 的测试在 Unity Test Runner 中执行。
+
 ## [0.1.0] — 首次发布
 
 ### Added
