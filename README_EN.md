@@ -79,7 +79,8 @@ duplicated here.
 | `BoundingVolume` | Local-space AABB (`Center`/`Extents`); input for indexing and culling |
 | `WorldBounds` | World-space AABB, recomputed every frame by `WorldBoundsSystem` (Burst job) |
 | `SpatialIndexConfig` | Singleton: dimension (QuadXY/QuadXZ/Octree), root extent, max depth, node capacity; built-in defaults apply when absent |
-| `SpatialTree` | Singleton: fully unmanaged spatial tree (unified quadtree/octree, zero steady-state GC). Use by `ref`: `QueryAABB`/`QuerySphere` fill a caller-provided `NativeList<Entity>`; call `Dispose()` before teardown to release native containers |
+| `SpatialTree` | Singleton: blittable spatial tree (unified quadtree/octree, zero steady-state GC), scalars + World-managed buffer handles — **no Dispose needed**, auto-freed with the World |
+| `SpatialTreeView` | Operation view: get it via `world.GetSpatialTree()` / `world.TryGetSpatialTree(out view)`; `Insert`/`Remove`/`Update`/`QueryAABB`/`QuerySphere` (fill a caller-provided `NativeList<Entity>`) |
 
 ### Frustum Culling
 

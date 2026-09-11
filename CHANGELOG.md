@@ -2,6 +2,31 @@
 
 All notable changes to Ember Core Components.
 
+## [2.0.0] — 空间树存储迁移至 World 托管缓冲（免 Dispose）
+
+### Breaking
+- **`SpatialTree` 不再持有原生容器，也不再提供 `Dispose()` / `Initialize(Allocator)`。**
+  树数据改存 World 托管 buffer（随 `World.Dispose()` 自动释放），组件本体只保留标量状态与 buffer 句柄。
+  - 旧：`ref var tree = ref world.GetComponent<SpatialTree>(owner); ... tree.Dispose();`
+  - 新：`if (world.TryGetSpatialTree(out var tree)) { tree.QuerySphere(center, r, ref buffer); }`
+    退出时随 `ECSManager.Dispose()` 一并回收，无需任何释放调用。
+- 树操作统一改经 `SpatialTreeView`（`world.GetSpatialTree()` / `world.TryGetSpatialTree`）：
+  `Insert` / `Remove` / `Update` / `QueryAABB` / `QuerySphere` / `BeginTick` / `EndTick` / `Clear`。
+- 实体映射由 `NativeParallelHashMap` 换为直索引稀疏映射（按 `Entity.Index` 直接寻址，
+  元素内版本校验槽位复用），查找 O(1) 且常数更低。
+
+### Added
+- `SpatialTreeView`（树操作视图）与 `SpatialTreeExtensions`（`GetSpatialTree` / `TryGetSpatialTree` / `EnsureSpatialTree`）。
+- 新增实体槽复用防护测试（旧 Index + 新 Version 不得命中旧映射）。
+
+### Fixed
+- 修复 `Subdivide` 中元素计数双重递减（`Unlink` 已递减后又手动递减），
+  计数漂移会干扰叶容量判断与空块收缩。
+
+### Changed
+- `SpatialIndexSystem` 不再需要 `Allocator.Persistent` 初始化，首 tick 自动建树。
+- 测试扩充至 52 项：CLI 25 项通过；27 项原生容器测试在 Unity Test Runner 中执行。
+
 ## [1.0.0] — 空间索引、视锥剔除与 GameObject 表现层
 
 ### Breaking

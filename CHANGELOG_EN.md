@@ -2,6 +2,32 @@
 
 All notable changes to Ember Core Components.
 
+## [2.0.0] — Spatial Tree Storage Migrated to World-Managed Buffers (Dispose-free)
+
+### Breaking
+- **`SpatialTree` no longer owns native containers and no longer exposes `Dispose()` / `Initialize(Allocator)`.**
+  Tree data now lives in World-managed buffers (auto-freed on `World.Dispose()`); the component itself keeps
+  only scalar state and buffer handles.
+  - Old: `ref var tree = ref world.GetComponent<SpatialTree>(owner); ... tree.Dispose();`
+  - New: `if (world.TryGetSpatialTree(out var tree)) { tree.QuerySphere(center, r, ref buffer); }`
+    Nothing to release; reclaimed with `ECSManager.Dispose()`.
+- All tree operations now go through `SpatialTreeView` (`world.GetSpatialTree()` / `world.TryGetSpatialTree`):
+  `Insert` / `Remove` / `Update` / `QueryAABB` / `QuerySphere` / `BeginTick` / `EndTick` / `Clear`.
+- The entity map switched from `NativeParallelHashMap` to a direct-index sparse map (addressed by `Entity.Index`
+  with in-element version validation for slot reuse) — O(1) lookup at a lower constant.
+
+### Added
+- `SpatialTreeView` (operation view) and `SpatialTreeExtensions` (`GetSpatialTree` / `TryGetSpatialTree` / `EnsureSpatialTree`).
+- New entity-slot-reuse guard test (stale index + new version must not hit an old mapping).
+
+### Fixed
+- Fixed a double decrement of element counts in `Subdivide` (decremented once by `Unlink` and again manually),
+  which skewed leaf-capacity checks and empty-block collapse.
+
+### Changed
+- `SpatialIndexSystem` no longer needs `Allocator.Persistent` initialization; the tree is created on first tick.
+- Test suite grew to 52 tests: 25 pass on CLI; 27 native-container tests run in the Unity Test Runner.
+
 ## [1.0.0] — Spatial Index, Frustum Culling & GameObject Presentation
 
 ### Breaking

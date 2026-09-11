@@ -75,7 +75,8 @@ Ember ECS 框架的基础组件库。提供空间变换、运动、时间、状�
 | `BoundingVolume` | 本地 AABB（`Center`/`Extents`），空间索引与剔除的输入 |
 | `WorldBounds` | 世界 AABB，由 `WorldBoundsSystem`（Job·Burst）每帧换算 |
 | `SpatialIndexConfig` | Singleton：维度（QuadXY/QuadXZ/Octree）、根范围、最大深度、节点容量；不配置时用内置默认值 |
-| `SpatialTree` | Singleton：纯非托管空间树（四叉/八叉统一，0GC 稳态）。经 `ref` 使用：`QueryAABB`/`QuerySphere` 填充调用方 `NativeList<Entity>`；退出前 `Dispose()` 释放原生容器 |
+| `SpatialTree` | Singleton：blittable 空间树（四叉/八叉统一，0GC 稳态），标量 + World 托管 buffer 句柄——**无需 Dispose**，随 World 自动释放 |
+| `SpatialTreeView` | 树操作视图：`world.GetSpatialTree()` / `world.TryGetSpatialTree(out view)` 获取；`Insert`/`Remove`/`Update`/`QueryAABB`/`QuerySphere`（填充调用方 `NativeList<Entity>`） |
 
 ### Culling（视锥剔除）
 
