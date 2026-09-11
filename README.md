@@ -1,0 +1,122 @@
+# Ember Core Components 使用手册
+
+[English](README_EN.md)
+
+Ember ECS 框架的基础组件库。提供空间变换、运动、时间、状态标记与确定性随机等通用组件，
+全部为 unmanaged struct，直接存入 Chunk 列，兼容 Burst 编译的 Job 系统。
+组件由 Ember 源生成器在编译时自动注册，无需手工登记。
+
+## 安装
+
+本包依赖 `com.ember.ecs`（Ember ECS 框架）。两者均通过 Unity Package Manager 安装：
+
+1. 打开项目的 `Packages/manifest.json`
+2. 添加依赖（版本号以实际发布为准）：
+
+```json
+{
+  "dependencies": {
+    "com.ember.ecs": "1.10.1",
+    "com.ember.core": "0.1.0"
+  }
+}
+```
+
+3. 若通过 Git URL 安装：UPM 不解析传递 Git 依赖，请确保 `com.ember.ecs` 已在 manifest 中显式声明。
+4. 保存后 Unity 自动解析；`Unity.Mathematics` 由框架依赖自动带入。
+
+要求 Unity 2022.3 或更高版本。
+
+## 组件清单
+
+命名空间均为 `Ember.Core`。实体层级关系（父/子）请直接使用框架内置的
+`ParentComponent` / `ChildEntity`，本库不重复定义。
+
+### Spatial（空间）
+
+| 组件 | 类型 | 说明 |
+|---|---|---|
+| `LocalTransform` | Data | 本地变换：`Position` (float3) / `Rotation` (quaternion) / `Scale` (float 等比)。无父实体时即世界变换。辅助：`Identity`、`FromPosition`、`ToMatrix()`、`TransformPoint`、`InverseTransformPoint`、`TransformDirection` |
+| `LocalToWorld` | Data | 本地到世界的 `float4x4` 矩阵。辅助：`Identity`、`Position` / `Right` / `Up` / `Forward`、`TransformPoint`、`Compose(local, parent)` |
+
+### Motion（运动）
+
+| 组件 | 类型 | 说明 |
+|---|---|---|
+| `LinearVelocity` | Data | 线速度 `Value` (float3)，米/秒。由移动系统积分到 `LocalTransform.Position` |
+| `AngularVelocity` | Data | 角速度 `Value` (float3)，轴角向量：方向为旋转轴，模长为角速度（弧度/秒） |
+
+### Timing（时间）
+
+| 组件 | 类型 | 说明 |
+|---|---|---|
+| `Lifetime` | Data | 剩余存活秒数 `Remaining`。由生命周期系统递减，归零后销毁实体（子弹、特效等） |
+| `Age` | Data | 已存活秒数 `Elapsed`。用于渐强/衰减插值、成长阶段判定 |
+| `WorldTime` | Singleton | 全局时间状态：`TimeScale` / `DeltaTime` / `UnscaledDeltaTime` / `ElapsedTime` / `FrameCount`。供 Job 内或无法访问 `SystemContext.DeltaTime` 的场景读取 |
+
+### State（状态标记）
+
+| 组件 | 类型 | 说明 |
+|---|---|---|
+| `Disabled` | Tag | 禁用标记。约定：系统查询附带 `None<Disabled>` 跳过被禁用实体；比销毁更适合临时摘除行为 |
+| `Static` | Tag | 静态标记。约定：移动/变换系统附带 `None<Static>` 跳过永不移动的实体，节省积分与矩阵重算 |
+| `Prefab` | Tag | 预制体模板标记。模板实体不参与常规逻辑（常规查询附带 `None<Prefab>`），仅作实例化来源 |
+
+### Random（随机）
+
+| 组件 | 类型 | 说明 |
+|---|---|---|
+| `GlobalRandom` | Singleton | 全局确定性随机源（`Unity.Mathematics.Random`）。值类型，每次取数推进状态，须以 `ref` 读写。并行随机流应按实体拆分独立随机组件，不要共用本单例 |
+
+## 使用示例
+
+```csharp
+using Ember;
+using Ember.Core;
+using Unity.Mathematics;
+
+public sealed class SpawnSystem : SystemBase
+{
+    protected override void DeclareAccess(AccessBuilder access)
+    {
+        access.Write<LocalTransform>().Write<LinearVelocity>().Write<Lifetime>()
+              .StructuralChanges();
+    }
+
+    protected override void OnTick(SystemContext ctx)
+    {
+        var entity = ctx.ECB.CreateEntity(new ComponentMask());
+        ctx.ECB.AddComponent(entity, LocalTransform.FromPosition(new float3(0f, 1f, 0f)));
+        ctx.ECB.AddComponent(entity, new LinearVelocity(new float3(0f, 0f, 5f)));
+        ctx.ECB.AddComponent(entity, new Lifetime(3f));
+    }
+}
+```
+
+读取全局时间单例：
+
+```csharp
+var owner = World.GetOrCreateSingleton<WorldTime>();
+ref var time = ref World.GetComponent<WorldTime>(owner);
+time.ElapsedTime += time.DeltaTime;
+```
+
+排除禁用实体的移动系统查询约定：
+
+```csharp
+var query = EntityQuery.With<LocalTransform, LinearVelocity>().None<Disabled, Static>();
+```
+
+## 组件设计约定
+
+1. 组件为 unmanaged struct，且**恰好**实现一种组件接口：
+   `IDataComponent` / `ITagComponent` / `ISingletonComponent` / `IBufferElement`。
+2. Tag 组件不含实例字段，只占 Archetype 掩码位。
+3. 组件只存数据与纯数学辅助方法；行为逻辑一律放在 System 中。
+4. 组件程序集必须在首个 `World` 创建前加载完毕（注册表随后封闭）。
+
+## 测试
+
+源码仓库内含 NUnit 测试项目 `tests/Ember.Core.Tests`。纯数学与确定性测试可在任意
+.NET 环境运行；依赖 `Unity.Collections` 原生容器的 World 集成测试在 Unity Test Runner
+中执行，纯 .NET CLI 下自动跳过（与 Ember 框架测试约定一致）。
